@@ -1,0 +1,218 @@
+---
+title: "Practical Machine Learning Project"
+author: "Joel Carlson"
+date: "Monday, September 15, 2014"
+output: html_document
+---
+
+Several devices, such as *Jawbone Up*, *Fitbit* and*Nike FuelBand* allow a user to capture data about personal activity.  In this writeup, data from such devices will be examined.  Users of the devices were asked to perform excercises using several different methods, classed as **A**, **B**, **C**, **D** and **E** in the dataset.
+
+The goal of this analysis is to use a supervised learning algorithm to predict which of these methods was used based on data from the sensors.
+
+An explanation of the variables can be found [here](http://groupware.les.inf.puc-rio.br/har)
+
+##Data Preparation
+The first step of the analysis is to load appropriate libraries, set a seed for reproducibility, and import the data:
+```{r, cache=TRUE, warning=FALSE, message=FALSE}
+library(caret)
+
+library(GGally)
+
+set.seed(333)
+# Download data
+training.url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+training.file <- "pml-training.csv"
+
+
+
+pml.training <- read.csv(training.file, stringsAsFactors=FALSE)
+
+```
+
+A summary of the data should be examined: (output not shown)
+```{r, results="hide"}
+summary(pml.training)
+```
+
+From which we found that there are many variables which contain incomplete data. To remove these a function was written to:
+
+-Replace blanks with `NA`s 
+
+-Remove any column with greater than 20 `NA`s
+```{r}
+Rem.NAs <- function(dat){
+    dat[dat == ""] <- NA
+    for(i in ncol(dat):1){
+        if(length(which(is.na(dat[,i]))) >= 20){
+                dat <- dat[,-i]
+        }
+    }
+    dat
+}   
+
+#run function on training data
+pml.training <- Rem.NAs(pml.training)
+
+#confirm there are no more NAs
+length(which(is.na(pml.training)))
+
+```
+
+There were also several columns which are not related to prediction:
+
+- "X"
+- "raw_timestamp_part_1" 
+- "raw_timestamp_part_2"
+- "cvtd_timestamp"
+- "new_window"
+- "num_window"
+
+Which are removed, and the `classe` column coerced to a factor for predictions:
+
+```{r}
+pml.training <- pml.training[,-which(names(pml.training) %in% c("X", "raw_timestamp_part_1", 
+                                    "raw_timestamp_part_2", "cvtd_timestamp",
+                                    "new_window", "num_window"))]   
+
+
+pml.training$classe <- as.factor(pml.training$classe) 
+```
+
+To test several algorithms, and for cross validation, the data was split into a very small training set, 0.5% of the training set.
+
+```{r}
+inTrain <- createDataPartition(y=pml.training$classe, p=0.05, list=FALSE)
+training <- pml.training[inTrain,]
+testing <- pml.training[-inTrain,]
+```
+
+##Algorithms
+###Generalized Boost Method
+The 'out of the box' "gbm" method from the caret package was used to make predictions on the training data.
+
+The variable `classe` is being predicted using all the other available variables:
+
+```{r, cache=TRUE, message=FALSE, warning=FALSE, error=FALSE}
+fitgbm <- train(classe ~ ., data=training, method="gbm", verbose=FALSE)
+
+predgbm <- predict(fitgbm, testing)
+```
+
+Examine prediction accuracy:
+```{r}
+testing$predRight <- predgbm==testing$classe
+table(predgbm, testing$classe)
+```
+The gbm achieves approximately 85% accuracy.
+
+###Random Forest
+The next algorithm used was a random forest method, again from the caret package:
+```{r, cache=TRUE, message=FALSE, warning=FALSE, error=FALSE}
+fitrf <- train(classe ~ ., data=training, method="rf")
+
+
+predrf <- predict(fitrf, testing)
+```
+
+And examine the output:
+```{r}
+testing$predRight <- predrf==testing$classe
+table(predrf, testing$classe)
+```
+
+So out of the box, the random forest algorithm has better accuracy, approximately 88%.
+
+To improve the prediction a four fold cross validation option was added:
+```{r, cache=TRUE, message=FALSE, warning=FALSE, error=FALSE}
+fitrf <- train(classe ~ ., data=training, method="rf", trControl = trainControl(method="cv", number=4))
+
+predrf <- predict(fitrf, testing)
+```
+
+And examined:
+```{r}
+testing$predRight <- predrf==testing$classe
+table(predrf, testing$classe)
+```
+
+Which improved the accuracy by a couple of percentage points.
+Preprocess of the data was attempted by centering and scaling, however this decreased the accuracy and is not shown.
+
+Thus, a four-fold cross validation random forest was chosen for the full analysis.
+
+###Final Analysis
+The data was re-partitioned so the algorithm took into account more of the data, and a new model was trained:
+```{r, cache=TRUE, message=FALSE, warning=FALSE, error=FALSE}
+inTrain <- createDataPartition(y=pml.training$classe, p=0.7, list=FALSE)
+training <- pml.training[inTrain,]
+testing <- pml.training[-inTrain,] 
+
+fitrf <- train(classe ~ ., data=training, method="rf", trControl = trainControl(method="cv", number=4))
+```
+
+
+The final results:
+
+
+```{r}
+predrf <- predict(fitrf, testing)
+testing$predRight <- predrf==testing$classe
+table(predrf, testing$classe)
+```
+```{r}
+print(fitrf)
+```
+
+The final model has near perfect accuracy on the artificial test data fold.
+
+Let's apply it to the actual test data:
+```{r, cache=TRUE, message=FALSE, warning=FALSE, error=FALSE}
+#Load data
+testing.url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+testing.file <- "pml-testing.csv"
+
+pml.testing <- read.csv(testing.file, stringsAsFactors=FALSE)
+
+#Remove NAs and Blanks
+pml.testing <- Rem.NAs(pml.testing)
+
+#Remove irrelevant variables
+pml.testing <- pml.testing[,-which(names(pml.testing) %in% c("X", "raw_timestamp_part_1", 
+                                    "raw_timestamp_part_2", "cvtd_timestamp",
+                                    "new_window", "num_window"))]   
+
+#Predict using our model
+predfinal <- predict(fitrf, pml.testing)
+testing$predRight <- predrf==testing$classe
+```
+
+Here I have omitted the results of the prediction so as not to foster plagiarism in the answers, however this model achieved 18/20 correct answers.
+
+##Errors and Miscellaneous
+The errors rates in each model found through cross validation on the `training set` are as follows:
+
+- The **GBM** model: $1 - 0.85 = 0.15$
+
+- The small **Random Forest** model: $1 - 0.88 = 0.12$
+
+- The cross validated **Random Forest** model: $1 - 0.91 = 0.09$
+
+- The final **Random Forest** model: $1 - \frac{18}{20} = 0.10 $
+
+
+Just for fun, in the final model we can see which variables contributed the most to the variability in the dataset.  This could be used in the future for dimensionality reduction to speed up computation time.  The caret package has a function for this: `varImp`
+```{r}
+fitVar <- varImp(fitrf)
+#Plot the top 10 contributors:
+plot(fitVar,10)
+```
+
+Let's examine the relationship between several of the top contributors. Values related to the `belt` are presented here, colored by the class of movement:
+
+```{r}
+ggpairs(data=training, 
+        columns=c("roll_belt", "yaw_belt", "pitch_belt"), title="High Variance Variables", colour = "classe") 
+```      
+
+Looks like the data is well categorized into clusters by the belt data.  This is a good indication that clustering algorithms will work well on this data set.
